@@ -107,6 +107,9 @@ Device::Device(shared_ptr<sigrok::Configurable> configurable) :
 				tr("No Limit"));
 			break;
 
+		case SR_CONF_NUM_LOGIC_CHANNELS:
+			// Only drivers that can switch channel modes offer GET+SET+LIST
+			// (e.g. sipeed-slogic-analyzer: 4/8/16/32 channels)
 		case SR_CONF_PATTERN_MODE:
 		case SR_CONF_BUFFERSIZE:
 		case SR_CONF_TRIGGER_SOURCE:

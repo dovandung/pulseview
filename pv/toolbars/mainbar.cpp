@@ -291,6 +291,8 @@ MainBar::MainBar(Session &session, QWidget *parent, pv::views::trace::View *view
 		this, SLOT(on_capture_state_changed(int)));
 	connect(&session, SIGNAL(device_changed()),
 		this, SLOT(on_device_changed()));
+	connect(&session_, SIGNAL(signals_changed()),
+		this, SLOT(on_signals_changed()));
 
 	update_device_list();
 }
@@ -803,8 +805,31 @@ void MainBar::on_sample_rate_changed()
 		commit_sample_rate();
 }
 
+void MainBar::on_signals_changed()
+{
+	// Follow every channel's enable state, see on_channel_enabled_changed()
+	for (const shared_ptr<data::SignalBase>& sb : session_.signalbases())
+		connect(sb.get(), SIGNAL(enabled_changed(bool)),
+			this, SLOT(on_channel_enabled_changed()), Qt::UniqueConnection);
+}
+
+void MainBar::on_channel_enabled_changed()
+{
+	// Some drivers (e.g. sipeed-slogic-analyzer) pick their channel mode
+	// from the enabled channels, and with it the sample rates on offer
+	update_sample_rate_selector();
+}
+
 void MainBar::on_config_changed()
 {
+	// A device option may have enabled or disabled channels (e.g. the
+	// number of logic channels): re-announce every logic channel's state
+	// so that the traces and the channel list follow. The driver is not
+	// called again, as the state does not change.
+	for (const shared_ptr<data::SignalBase>& sb : session_.signalbases())
+		if (sb->type() == data::SignalBase::LogicChannel)
+			sb->set_enabled(sb->enabled());
+
 	// We want to also call update_sample_rate_selector() here in case
 	// the user changed the SR_CONF_EXTERNAL_CLOCK option. However,
 	// commit_sample_rate() does this already, so we don't call it here

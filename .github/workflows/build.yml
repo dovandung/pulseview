@@ -1,17 +1,148 @@
-name: Build PulseView artifacts
+name: Build PulseView for Windows
+
+# Builds Windows installers (32 and 64 bit) of this PulseView with
+# dovandung/libsigrok and stock libusb 1.0.30 (with sigrok's RAW_IO policy).
+# The download is on the run's summary page, under "Artifacts".
+#
+# Based on sigrokproject/sigrok-build's build.yml: same MXE Docker image and
+# dependency scripts, with these changes:
+# - libusb in the image's MXE is replaced by libusb 1.0.30 (contrib/mxe/)
+# - libsigrok comes from github.com/dovandung/libsigrok (LIBSIGROK_* below)
+# - libhsdaoh is built first, so the hsdaoh-la driver is included
+# - the sigrok repositories are cloned from their GitHub mirrors
 
 on:
-  push:                # When the repo itself has a new commit on the master branch
+  push:
     branches:
       - master
-    tags:              # When a new tag was created
-  workflow_dispatch:   # When the workflow was started manually from github
-  pull_request:
-    types:
-      - labeled        # When a pull request received a new label (e.g. "provide_binaries")
-      - synchronize    # When a pull request's branch was updated with a new commit
+    tags:
+      - '*'
+  workflow_dispatch:   # "Run workflow" button on the Actions tab
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  INSTALL_DIR: "${{ github.workspace }}/sr"
+  LIBSERIALPORT_REPO: "https://github.com/sigrokproject/libserialport.git"
+  LIBSIGROK_REPO: "https://github.com/dovandung/libsigrok.git"
+  LIBSIGROK_BRANCH: "master"
+  LIBSIGROKDECODE_REPO: "https://github.com/sigrokproject/libsigrokdecode.git"
+  SIGROK_FIRMWARE_REPO: "https://github.com/sigrokproject/sigrok-firmware.git"
+  SIGROK_FIRMWARE_FX2LAFW_REPO: "https://github.com/sigrokproject/sigrok-firmware-fx2lafw.git"
+  SIGROK_DUMPS_REPO: "https://github.com/sigrokproject/sigrok-dumps.git"
+  SIGROK_BUILD_REPO: "https://github.com/sigrokproject/sigrok-build.git"
+  GIT_CLONE: "git clone --depth=1"
 
 jobs:
-  call-build-workflow:
-    name: Sigrok artifact builder
-    uses: sigrokproject/sigrok-build/.github/workflows/build.yml@master
+  build_pulseview_mxe:
+    name: PulseView MXE ${{ matrix.target.target }} ${{ matrix.build_type.name }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/sigrokproject/sigrok-mxe:latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { target: "i686", nsis_param: "" }
+          - { target: "x86_64", nsis_param: "-DPE64=1" }
+        build_type:
+          - { type: "Release", name: "release" }
+
+    env:
+      TARGET: ${{ matrix.target.target }}
+      BUILD_TYPE: ${{ matrix.build_type.name }}
+      DEBUG: 0
+      # sigrok.org's certificate is rejected by the image's wget
+      WGET: "wget -c --quiet --no-check-certificate"
+      ARTIFACT_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('git-{0}', github.sha) }}
+
+    steps:
+      - name: Checkout this PulseView
+        uses: actions/checkout@v4
+        with:
+          path: pulseview
+
+      - name: Checkout sigrok-build (build scripts)
+        run: $GIT_CLONE $SIGROK_BUILD_REPO sigrok-build
+
+      - name: Replace MXE's libusb with libusb 1.0.30
+        run: |
+          cp pulseview/contrib/mxe/libusb1.mk            "$MXE_DIR"/src/libusb1.mk
+          cp pulseview/contrib/mxe/libusb1-1-fixes.patch "$MXE_DIR"/src/libusb1-1-fixes.patch
+          cd "$MXE_DIR"
+          make MXE_USE_CCACHE= DONT_CHECK_REQUIREMENTS=1 \
+            MXE_TARGETS="$TARGET-w64-mingw32.static.posix" \
+            download-only-libusb1 build-only-libusb1_$TARGET-w64-mingw32.static.posix
+          grep Version usr/$TARGET-w64-mingw32.static.posix/lib/pkgconfig/libusb-1.0.pc
+          grep -q libusb_endpoint_set_raw_io \
+            usr/$TARGET-w64-mingw32.static.posix/include/libusb-1.0/libusb.h
+
+      - name: Build libhsdaoh (for the hsdaoh-la driver)
+        run: |
+          source sigrok-build/ci/mxe/sigrok-mxe-init-toolchain.sh
+          export TOOLCHAIN_TRIPLET PREFIX="$INSTALL_DIR" HSDAOH_LIBUSB=mxe
+          mkdir -p "$INSTALL_DIR" hsdaoh-build
+          $GIT_CLONE -b "$LIBSIGROK_BRANCH" "$LIBSIGROK_REPO" hsdaoh-build/libsigrok
+          cd hsdaoh-build
+          # Optional: if this fails, PulseView is built without hsdaoh-la.
+          if ! sh libsigrok/src/hardware/hsdaoh-la/mxe-build-deps.sh; then
+            echo "::warning::libhsdaoh failed to build; hsdaoh-la is left out"
+            rm -f "$INSTALL_DIR"/lib/pkgconfig/libhsdaoh.pc
+          fi
+
+      - name: Build dependencies (libserialport, libsigrok, libsigrokdecode, firmware)
+        run: |
+          cd sigrok-build/ci/mxe
+          source sigrok-mxe-init-toolchain.sh
+          ./sigrok-mxe-build-dependencies.sh
+
+      - name: Show which of the new libsigrok drivers were built
+        run: |
+          # In config.log, HW_<driver>_TRUE='' means built, '#' means left out
+          grep -E "^HW_(SIPEED_SLOGIC_ANALYZER|CYPRESS_FX3_16|CYPRESS_FX3_8|HSDAOH_LA|FX2LAFW)_TRUE=" \
+            sigrok-build/ci/mxe/build/libsigrok/config.log || true
+
+      - name: Build PulseView
+        run: |
+          source sigrok-build/ci/mxe/sigrok-mxe-init-toolchain.sh
+          mkdir -p pulseview/build
+          cd pulseview/build
+          $CMAKE \
+            -DCMAKE_INSTALL_PREFIX:PATH=$INSTALL_DIR \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type.type }} \
+            -DDISABLE_WERROR=TRUE \
+            -DENABLE_TESTS=FALSE \
+            ..
+          make $PARALLEL $V
+          make install/strip $V
+
+      - name: Build NSIS installer
+        run: |
+          source sigrok-build/ci/mxe/sigrok-mxe-init-toolchain.sh
+          # Zadig (shipped with PulseView for easy driver switching)
+          $WGET https://github.com/pbatard/libwdi/releases/download/b721/zadig-2.4.exe -O $INSTALL_DIR/zadig.exe
+          $WGET https://github.com/pbatard/libwdi/releases/download/v1.2.5/zadig_xp-2.2.exe -O $INSTALL_DIR/zadig_xp.exe
+          cp sigrok-build/ci/mxe/contrib-mxe/FileAssociation.nsh pulseview/build/contrib
+          makensis ${{ matrix.target.nsis_param }} pulseview/build/contrib/pulseview_cross.nsi
+
+      - name: Rename installer
+        run: |
+          cd pulseview/build/contrib
+          mv pulseview-*installer.exe pulseview-${{ env.ARTIFACT_VERSION }}-${{ matrix.target.target }}-${{ matrix.build_type.name }}-installer.exe
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulseview-${{ matrix.target.target }}-${{ matrix.build_type.name }}
+          path: pulseview/build/contrib/pulseview*installer.exe
+
+      - name: Attach installer to the release (tags only)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pulseview/build/contrib/pulseview*installer.exe
+    permissions:
+      contents: write
