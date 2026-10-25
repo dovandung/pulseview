@@ -39,8 +39,16 @@ jobs:
   build_pulseview_mxe:
     name: PulseView MXE ${{ matrix.target.target }} ${{ matrix.build_type.name }}
     runs-on: ubuntu-latest
+    # Built by mxe-image.yml (sigrok's own image is no longer pullable).
     container:
-      image: ghcr.io/sigrokproject/sigrok-mxe:latest
+      image: ghcr.io/${{ github.repository_owner }}/sigrok-mxe-${{ matrix.target.target }}:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    permissions:
+      contents: write
+      packages: read
 
     strategy:
       fail-fast: false
@@ -68,17 +76,20 @@ jobs:
       - name: Checkout sigrok-build (build scripts)
         run: $GIT_CLONE $SIGROK_BUILD_REPO sigrok-build
 
-      - name: Replace MXE's libusb with libusb 1.0.30
+      - name: Check libusb 1.0.30 in MXE
         run: |
-          cp pulseview/contrib/mxe/libusb1.mk            "$MXE_DIR"/src/libusb1.mk
-          cp pulseview/contrib/mxe/libusb1-1-fixes.patch "$MXE_DIR"/src/libusb1-1-fixes.patch
-          cd "$MXE_DIR"
-          make MXE_USE_CCACHE= DONT_CHECK_REQUIREMENTS=1 \
-            MXE_TARGETS="$TARGET-w64-mingw32.static.posix" \
-            download-only-libusb1 build-only-libusb1_$TARGET-w64-mingw32.static.posix
-          grep Version usr/$TARGET-w64-mingw32.static.posix/lib/pkgconfig/libusb-1.0.pc
-          grep -q libusb_endpoint_set_raw_io \
-            usr/$TARGET-w64-mingw32.static.posix/include/libusb-1.0/libusb.h
+          PC="$MXE_DIR/usr/$TARGET-w64-mingw32.static.posix/lib/pkgconfig/libusb-1.0.pc"
+          if ! grep -q 'Version: 1.0.30' "$PC" || \
+             ! cmp -s pulseview/contrib/mxe/libusb1-1-fixes.patch "$MXE_DIR"/src/libusb1-1-fixes.patch; then
+            # Image is older than contrib/mxe: rebuild only libusb1
+            cp pulseview/contrib/mxe/libusb1.mk            "$MXE_DIR"/src/libusb1.mk
+            cp pulseview/contrib/mxe/libusb1-1-fixes.patch "$MXE_DIR"/src/libusb1-1-fixes.patch
+            cd "$MXE_DIR"
+            make MXE_USE_CCACHE= DONT_CHECK_REQUIREMENTS=1 \
+              MXE_TARGETS="$TARGET-w64-mingw32.static.posix" \
+              download-only-libusb1 build-only-libusb1_$TARGET-w64-mingw32.static.posix
+          fi
+          grep Version "$PC"
 
       - name: Build libhsdaoh (for the hsdaoh-la driver)
         run: |
@@ -144,5 +155,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: pulseview/build/contrib/pulseview*installer.exe
-    permissions:
-      contents: write
