@@ -1,0 +1,73 @@
+name: Build MXE image
+
+# Builds the MXE cross-compile images that build.yml runs in, one per
+# target, and pushes them to this account's GitHub container registry:
+#   ghcr.io/<owner>/sigrok-mxe-i686:latest
+#   ghcr.io/<owner>/sigrok-mxe-x86_64:latest
+# Run it once (Actions tab > Build MXE image > Run workflow), and again only
+# when contrib/mxe/ changes. Each image takes about 2-5 hours.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - 'contrib/mxe/sigrok-mxe.Dockerfile'
+      - 'contrib/mxe/libusb1.mk'
+      - 'contrib/mxe/libusb1-1-fixes.patch'
+      - '.github/workflows/mxe-image.yml'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    name: MXE image ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [ "i686", "x86_64" ]
+
+    steps:
+      - name: Free disk space on the runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare the build context
+        run: |
+          git clone --depth=1 https://github.com/sigrokproject/sigrok-build.git
+          mkdir ctx
+          cp contrib/mxe/sigrok-mxe.Dockerfile contrib/mxe/libusb1.mk \
+             contrib/mxe/libusb1-1-fixes.patch ctx/
+          cp sigrok-build/docker/mxe_fixes.patch sigrok-build/docker/hidapi_fixes.patch ctx/
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sigrok-mxe-${{ matrix.target }}" >> $GITHUB_ENV
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ctx
+          file: ctx/sigrok-mxe.Dockerfile
+          build-args: MXE_TARGET=${{ matrix.target }}-w64-mingw32.static.posix
+          push: true
+          tags: ${{ env.IMAGE }}:latest
+          # Layer cache: a failed or timed-out run continues where it stopped
+          cache-from: type=gha,scope=mxe-${{ matrix.target }}
+          cache-to: type=gha,scope=mxe-${{ matrix.target }},mode=max
