@@ -110,11 +110,13 @@ jobs:
           source sigrok-mxe-init-toolchain.sh
           ./sigrok-mxe-build-dependencies.sh
 
-      - name: Show which of the new libsigrok drivers were built
+      - name: Show which libsigrok drivers were built
         run: |
-          # In config.log, HW_<driver>_TRUE='' means built, '#' means left out
-          grep -E "^HW_(SIPEED_SLOGIC_ANALYZER|CYPRESS_FX3_16|CYPRESS_FX3_8|HSDAOH_LA|FX2LAFW)_TRUE=" \
-            sigrok-build/ci/mxe/build/libsigrok/config.log || true
+          L=sigrok-build/ci/mxe/build/libsigrok/config.log
+          echo "Built:"
+          sed -n "s/^HW_\(.*\)_TRUE=''$/  \1/p" $L | tr 'A-Z_' 'a-z-'
+          echo "Left out:"
+          sed -n "s/^HW_\(.*\)_TRUE='#'$/  \1/p" $L | tr 'A-Z_' 'a-z-'
 
       - name: Build PulseView
         run: |
