@@ -28,6 +28,8 @@ env:
   LIBSERIALPORT_REPO: "https://github.com/sigrokproject/libserialport.git"
   LIBSIGROK_REPO: "https://github.com/dovandung/libsigrok.git"
   LIBSIGROK_BRANCH: "master"
+  # libuvc master needs CMake 3.21 since 48bb9fb; the MXE image has 3.20.1
+  LIBUVC_BRANCH: "v0.0.9"
   LIBSIGROKDECODE_REPO: "https://github.com/sigrokproject/libsigrokdecode.git"
   SIGROK_FIRMWARE_REPO: "https://github.com/sigrokproject/sigrok-firmware.git"
   SIGROK_FIRMWARE_FX2LAFW_REPO: "https://github.com/sigrokproject/sigrok-firmware-fx2lafw.git"
