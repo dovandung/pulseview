@@ -27,7 +27,7 @@ env:
   INSTALL_DIR: "${{ github.workspace }}/sr"
   LIBSERIALPORT_REPO: "https://github.com/sigrokproject/libserialport.git"
   LIBSIGROK_REPO: "https://github.com/dovandung/libsigrok.git"
-  LIBSIGROK_BRANCH: "master"
+  LIBSIGROK_BRANCH: "test-sipeed-slogic-sync"
   LIBSIGROKDECODE_REPO: "https://github.com/sigrokproject/libsigrokdecode.git"
   SIGROK_FIRMWARE_REPO: "https://github.com/sigrokproject/sigrok-firmware.git"
   SIGROK_FIRMWARE_FX2LAFW_REPO: "https://github.com/sigrokproject/sigrok-firmware-fx2lafw.git"
